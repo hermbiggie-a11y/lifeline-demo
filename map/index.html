@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lifeline Command</title>
+<!-- Vendored Leaflet only. No basemap tiles, no CDN: this page works with the internet off. -->
+<link rel="stylesheet" href="/vendor/leaflet.css">
+<script src="/vendor/leaflet.js"></script>
+<style>
+  :root { --bg:#0b0e13; --panel:#141922; --panel2:#1b2230; --ink:#e6edf3; --muted:#8b949e; --line:#2a3240;
+          --destroyed:#f85149; --damaged:#d29922; --possible:#8b949e; --survivor:#3fb950; --urgent:#ff7b72;
+          --nosignal:#58a6ff; --accent:#58a6ff; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; margin:0; background:var(--bg); color:var(--ink);
+               font:14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display:flex; flex-direction:column; }
+  header { display:flex; flex-wrap:wrap; gap:10px 22px; align-items:center; padding:10px 16px;
+           background:var(--panel); border-bottom:1px solid var(--line); }
+  .brand { font-weight:800; letter-spacing:.08em; }
+  .brand small { display:block; font-weight:500; letter-spacing:0; color:var(--muted); font-size:11px; }
+  select, button { font:inherit; color:var(--ink); background:var(--panel2); border:1px solid var(--line);
+                   border-radius:6px; padding:5px 9px; cursor:pointer; }
+  button:hover, select:hover { border-color:var(--accent); }
+  button.go { background:#1f6feb; border-color:#1f6feb; font-weight:600; }
+  .stat { display:flex; flex-direction:column; min-width:70px; }
+  .stat b { font-size:21px; font-variant-numeric:tabular-nums; line-height:1.1; }
+  .stat span { color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; }
+  .badges { display:flex; gap:6px; flex-wrap:wrap; margin-left:auto; }
+  .badge { padding:3px 8px; border:1px solid var(--damaged); color:var(--damaged); border-radius:4px;
+           font-size:11px; font-weight:700; letter-spacing:.05em; }
+  .badge.ok { border-color:var(--survivor); color:var(--survivor); }
+  main { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 380px; }
+  #mapwrap { position:relative; min-height:300px; }
+  #map { position:absolute; inset:0; background:#05070a; }
+  #imgtoggle { position:absolute; top:10px; right:10px; z-index:1000; display:flex; gap:6px; align-items:center;
+               background:rgba(20,25,34,.92); border:1px solid var(--line); border-radius:8px; padding:6px 8px; font-size:12px; }
+  #imgtoggle[hidden] { display:none; }
+  #imgtoggle button.on { background:#1f6feb; border-color:#1f6feb; }
+  #swipe { position:absolute; inset:0; width:100%; height:100%; margin:0; z-index:950; opacity:0; cursor:ew-resize; pointer-events:none; }
+  #swipe[hidden], #swipeline[hidden], #swipelbl[hidden] { display:none; }
+  #swipeline { position:absolute; top:0; bottom:0; width:4px; margin-left:-2px; background:#fff; z-index:940;
+               box-shadow:0 0 10px #000; pointer-events:auto; cursor:ew-resize; }
+  #swipeline::after { content:'⇆'; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); background:#fff;
+                      color:#0b0e13; font-weight:800; border-radius:50%; width:34px; height:34px; line-height:34px; text-align:center; }
+  #swipelbl { position:absolute; top:60px; left:10px; right:10px; z-index:940; display:flex; justify-content:space-between;
+              pointer-events:none; font-weight:800; letter-spacing:.1em; text-shadow:0 0 4px #000, 0 0 4px #000; }
+  #scope { position:absolute; right:10px; bottom:34px; z-index:1000; width:min(540px, calc(100% - 20px));
+           background:rgba(11,14,19,.94); border:2px solid var(--line); border-radius:10px; padding:8px 10px; }
+  #scope[hidden] { display:none; }
+  #scope.moving { border-color:var(--survivor); box-shadow:0 0 24px rgba(63,185,80,.5); }
+  #scope canvas { width:100%; height:150px; display:block; margin:4px 0; }
+  .scopehead { display:flex; justify-content:space-between; font-size:12px; letter-spacing:.06em; }
+  #scopestate.on { color:var(--survivor); font-weight:800; }
+  #help { position:absolute; left:10px; bottom:34px; z-index:1000; max-width:340px; font-size:12px; line-height:1.45;
+          background:rgba(20,25,34,.92); border:1px solid var(--line); border-radius:8px; padding:8px 10px; color:var(--muted); }
+  #help b { display:block; color:var(--ink); margin-bottom:2px; }
+  aside { overflow:auto; background:var(--panel); border-left:1px solid var(--line); padding:10px 12px 40px; }
+  section { margin-bottom:14px; }
+  h3 { margin:6px 0 6px; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.07em;
+       display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  h3 .note { text-transform:none; letter-spacing:0; font-weight:400; }
+  .card { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:9px 10px; }
+  .row { display:flex; gap:8px; align-items:center; padding:5px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  .row:last-child { border-bottom:0; }
+  .row .p { width:20px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .row .id { width:42px; font-weight:700; }
+  .row .st { flex:1; color:var(--muted); }
+  .clickable { cursor:pointer; } .clickable:hover { background:#202838; }
+  .dot { width:9px; height:9px; border-radius:50%; flex:none; }
+  .decision { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0;
+              border-bottom:1px solid var(--line); }
+  .decision:last-child { border-bottom:0; }
+  .decision span { color:var(--damaged); font-weight:600; }
+  .muted { color:var(--muted); }
+  .imgs { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:8px 0; }
+  .imgs figure { margin:0; } .imgs img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:4px; display:block; }
+  .imgs figcaption { font-size:11px; color:var(--muted); margin-top:2px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 10px; font-size:12.5px; margin:0; }
+  .kv dt { color:var(--muted); } .kv dd { margin:0; }
+  .ai { margin-top:6px; font-size:12.5px; border-left:3px solid var(--accent); padding:4px 8px; background:#111722; }
+  .meter { height:6px; background:#0b0e13; border-radius:3px; overflow:hidden; margin-top:3px; }
+  .meter i { display:block; height:100%; background:var(--survivor); }
+  .feed .item { padding:6px 0; border-bottom:1px solid var(--line); font-size:12.5px; }
+  .feed .item:last-child { border-bottom:0; }
+  .feed .meta { font-size:11px; color:var(--muted); }
+  .posted { color:var(--survivor); } .pending { color:var(--damaged); }
+  #attr { position:fixed; left:8px; bottom:6px; z-index:1000; font-size:11px; color:var(--muted);
+          background:rgba(11,14,19,.85); padding:3px 6px; border-radius:3px; max-width:calc(100% - 16px); }
+  .leaflet-container { background:#05070a; }
+  #testbanner { position:fixed; inset:auto 0 40% 0; margin:auto; width:min(560px, 90vw); z-index:2000; text-align:center;
+                padding:22px; border-radius:14px; font-size:34px; font-weight:800; letter-spacing:.04em;
+                background:rgba(11,14,19,.94); border:3px solid var(--accent); box-shadow:0 10px 40px #000; }
+  #testbanner small { display:block; font-size:15px; font-weight:500; color:var(--muted); letter-spacing:0; margin-top:6px; }
+  #testbanner.walk { border-color:var(--survivor); color:var(--survivor); }
+  .pulse { animation:pulse 1.2s ease-out infinite; }
+  @keyframes pulse { 0% { stroke-width:2; stroke-opacity:1; } 100% { stroke-width:28; stroke-opacity:0; } }
+  .team { background:#e6edf3; color:#0b0e13; font-weight:800; font-size:11px; border-radius:3px;
+          text-align:center; line-height:18px; box-shadow:0 0 0 2px #0b0e13; }
+  .lbl { color:var(--ink); font-size:11px; font-weight:700; text-shadow:0 0 3px #000, 0 0 3px #000; white-space:nowrap; }
+  .legend { font-size:11.5px; color:var(--muted); display:flex; flex-wrap:wrap; gap:4px 12px; margin-bottom:6px; }
+  .legend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:-1px; }
+  @media (max-width:900px) { main { grid-template-columns:1fr; grid-template-rows:55vh auto; }
+                             aside { border-left:0; border-top:1px solid var(--line); } .badges { margin-left:0; } }
+
+  /* ---------- polish ---------- */
+  header { gap:10px 14px; padding:10px 14px; }
+  .brand { font-size:18px; }
+  .regionpick { display:flex; flex-direction:column; font-size:10.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+  .regionpick select { margin-top:2px; font-size:14px; padding:6px 10px; min-width:240px; }
+  header .stat { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:5px 12px; }
+  header .stat b { font-size:19px; }
+  aside { padding:12px 14px 50px; }
+  section, details.more, details.guide { margin-bottom:14px; }
+  h3 { font-size:12px; color:var(--ink); letter-spacing:.04em; text-transform:none; font-weight:700; }
+  h3 .note, summary .note { color:var(--muted); font-weight:400; font-size:11px; }
+  .card { border-radius:10px; padding:10px 12px; }
+  .decide .card { border-left:4px solid var(--damaged); background:linear-gradient(90deg, rgba(210,153,34,.10), var(--panel2) 40%); }
+  .decision { padding:8px 0; } .decision span { font-size:13.5px; }
+  button.go { padding:6px 14px; border-radius:8px; }
+  details summary { cursor:pointer; font-size:12px; font-weight:700; padding:6px 2px; list-style:none; display:flex; gap:8px; align-items:center; }
+  details summary::-webkit-details-marker { display:none; }
+  details summary::before { content:'▸'; color:var(--muted); transition:transform .15s; }
+  details[open] summary::before { transform:rotate(90deg); }
+  details.guide { background:#10233d; border:1px solid #1f6feb55; border-radius:10px; padding:4px 12px 8px; }
+  details.guide ol { margin:4px 0 2px; padding-left:18px; font-size:12.5px; line-height:1.5; color:#c9d1d9; }
+  details.guide li { margin-bottom:4px; }
+  code { background:#0b0e13; border:1px solid var(--line); border-radius:4px; padding:0 4px; font-size:12px; }
+  #help { max-width:none; width:auto; right:auto; padding:8px 10px; }
+  #help .lg { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; margin:2px 0; color:var(--ink); }
+  #help .lg i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-left:6px; }
+  #help .lg i:first-child { margin-left:0; }
+  #help .ln { display:inline-block; width:22px; border-top:3px dashed; margin-left:6px; }
+  #loading { position:absolute; top:12px; left:50%; transform:translateX(-50%); z-index:1000; background:rgba(20,25,34,.95);
+             border:1px solid var(--line); border-radius:20px; padding:6px 14px; font-size:12.5px; }
+  #loading[hidden] { display:none; }
+  #map { background:#0d1117 radial-gradient(circle at 1px 1px, #1c2330 1px, transparent 0) 0 0/22px 22px; }
+  .leaflet-container { background:transparent; }
+
+  .chat #convo { max-height:300px; overflow:auto; display:flex; flex-direction:column; gap:6px; margin-bottom:8px; padding-right:2px; }
+  .msg { max-width:92%; padding:6px 9px; border-radius:10px; font-size:12.5px; line-height:1.4; white-space:pre-wrap; word-break:break-word; }
+  .msg .who { display:block; font-size:10.5px; color:var(--muted); margin-bottom:2px; }
+  .msg.user { align-self:flex-end; background:#1f6feb33; border:1px solid #1f6feb66; }
+  .msg.bot { align-self:flex-start; background:#0b0e13; border:1px solid var(--line); }
+  .msg.pending { opacity:.7; font-style:italic; }
+  #cmdform { display:flex; gap:6px; }
+  #cmd { flex:1; min-width:0; font:inherit; color:var(--ink); background:#0b0e13; border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
+  #cmd:focus { outline:2px solid #1f6feb; }
+  .chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
+  .chips button { font-size:11.5px; padding:3px 9px; border-radius:14px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">🛟 LIFELINE<small id="subtitle">Earthquake 6 Feb 2023 · replay</small></div>
+  <label class="regionpick"><span>Incident</span><select id="region" title="Incident region"></select></label>
+  <div class="stat"><b id="clock">–</b><span id="clocklbl">replay clock</span></div>
+  <div class="stat"><b id="hours">–</b><span>hours after quake</span></div>
+  <div class="stat"><b id="ranked">–</b><span>sites ranked</span></div>
+  <div class="stat"><b id="teams">–</b><span>teams out</span></div>
+  <div class="stat"><b id="surv">–</b><span>survivors</span></div>
+  <div class="stat"><b>40 h</b><span>first official map, 2023</span></div>
+  <div class="badges"><span class="badge">SIMULATED SENSORS MARKED</span><span class="badge ok">ALL AI ON THIS GB10</span></div>
+</header>
+<main>
+  <div id="mapwrap"><div id="map"></div>
+    <div id="imgtoggle" hidden><span class="muted">Satellite</span>
+      <button id="btnBefore" onclick="showLayer('before')">Before</button><button id="btnSwipe" onclick="startSwipe()">Swipe ⇆</button><button id="btnAfter" onclick="showLayer('after')">After</button>
+      <span id="imgdate" class="muted"></span></div>
+    <input id="swipe" type="range" min="0" max="100" value="50" hidden aria-label="Swipe between before and after">
+    <div id="swipeline" hidden></div><div id="swipelbl" hidden><span>BEFORE</span><span>AFTER</span></div>
+    <div id="scope" hidden><div class="scopehead"><b>LIVE WiFi RADAR</b> <span id="scopestate">–</span></div>
+      <canvas id="scopecv" width="520" height="150"></canvas>
+      <div class="muted" style="font-size:11px">Real signal of this GB10's two WiFi antennas, last 15 s. A person moving
+        through the room bends the radio waves; RuView's classifier turns that into "movement".</div></div>
+    <div id="help">
+      <div class="lg"><i style="background:var(--destroyed)"></i>Destroyed <i style="background:var(--damaged)"></i>Damaged
+        <i style="background:var(--possible)"></i>Possibly damaged</div>
+      <div class="lg"><i style="background:var(--survivor)"></i>Sign of life <i style="background:var(--nosignal)"></i>No signal yet (not "empty")</div>
+      <div class="lg"><b class="ln" style="border-color:#ff7b72"></b>Team 1 <b class="ln" style="border-color:#79c0ff"></b>Team 2
+        <b class="ln" style="border-color:#d2a8ff"></b>Team 3 <span class="muted">routes (OR-Tools)</span></div>
+    </div>
+    <div id="loading" hidden>🛰️ Loading satellite imagery…</div>
+  </div>
+  <aside>
+    <details class="guide" id="guide" open>
+      <summary>👋 Start here</summary>
+      <ol>
+        <li><b>Review the plan.</b> Dots are damaged buildings from satellite data; dashed lines are each team's route.</li>
+        <li><b>Approve.</b> Press <i>Approve</i> below, or reply <code>ack 5</code> in Telegram. Nothing moves without you.</li>
+        <li><b>Watch for life.</b> Reports (<code>report 8 tapping heard</code>) and sensors raise 🟡 then 🟢. The plan re-solves.</li>
+      </ol>
+    </details>
+    <section class="decide">
+      <h3>✋ Waiting for your decision</h3>
+      <div class="card" id="decisions"></div>
+    </section>
+    <section>
+      <h3>💬 Talk to Lifeline <span class="note">same commands as Telegram · both stay in sync</span></h3>
+      <div class="card chat">
+        <div id="convo"></div>
+        <form id="cmdform" autocomplete="off">
+          <input id="cmd" placeholder='Try: status · ack 5 · report 8 tapping heard · Is Building 12 empty?' aria-label="Command">
+          <button class="go" type="submit">Send</button>
+        </form>
+        <div class="chips">
+          <button type="button" onclick="say('status')">status</button>
+          <button type="button" onclick="say('who is alive')">who is alive</button>
+          <button type="button" onclick="say('ack all')">ack all</button>
+          <button type="button" onclick="fill('report 8 tapping heard')">report…</button>
+          <button type="button" onclick="say('help')">help</button>
+        </div>
+      </div>
+    </section>
+    <section>
+      <h3>🏢 Selected building <span id="siteid" class="note"></span></h3>
+      <div class="card" id="detail"><span class="muted">Click a building on the map or in the list below.</span></div>
+    </section>
+    <section>
+      <h3>💓 Signs of life</h3>
+      <div class="card" id="people"></div>
+    </section>
+    <section>
+      <h3>📍 Where to dig <span class="note">ranked by people likely trapped</span></h3>
+      <div class="card" id="list"></div>
+    </section>
+    <details class="more" open>
+      <summary>💬 What the agent posted to Telegram</summary>
+      <div class="card feed" id="feed"></div>
+    </details>
+    <details class="more">
+      <summary>📡 WiFi sensing (RuView) <a href="http://localhost:3000/ui/index.html" target="_blank" class="note">open RuView ↗</a></summary>
+      <div class="card" id="ruview"><span class="muted">connecting…</span></div>
+    </details>
+    <details class="more">
+      <summary>🧪 Proof: measured on this GB10</summary>
+      <div class="card" id="proof"><span class="muted">loading…</span></div>
+    </details>
+  </aside>
+</main>
+<div id="testbanner" hidden></div>
+<div id="attr">Damage grading: Copernicus EMS EMSR648, © European Union. <span id="imgattr"></span>Simulated sensors are marked. No signal ≠ nobody.</div>
+<script>
+const $ = id => document.getElementById(id);
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const COLORS = { Destroyed:'--destroyed', Damaged:'--damaged', 'Possibly damaged':'--possible' };
+const STATUS = { unsearched:'no team yet', dispatched:'team searching', scanning:'team searching',
+  no_signal_2_scans:'no signal after 2 scans', possible_survivor:'possible survivor', confirmed_survivor:'survivor confirmed' };
+const map = L.map('map', { attributionControl:false });
+map.createPane('ctx'); map.getPane('ctx').style.zIndex = 150;          // low-res context image, under the tiles
+let layers = L.layerGroup().addTo(map), overlay = null, region = null, selected = null, last = null;
+let imgLayer = 'after', tilesMeta = null, ctxLayer = null;
+const name = id => 'Building ' + parseInt(id.slice(2), 10);
+const team = t => 'Team ' + t.slice(1);
+function setToggle() {
+  $('btnBefore').classList.toggle('on', imgLayer === 'before'); $('btnAfter').classList.toggle('on', imgLayer === 'after');
+  if (tilesMeta) $('imgdate').textContent = imgLayer === 'before' ? tilesMeta.before_date : tilesMeta.after_date;
+}
+let beforeLayer = null, swipeOn = false, swipePct = 50;
+function clipBefore() {
+  if (!beforeLayer || !swipeOn) return;
+  const size = map.getSize(), nw = map.containerPointToLayerPoint([0, 0]), se = map.containerPointToLayerPoint(size);
+  const x = nw.x + size.x * swipePct / 100;
+  beforeLayer.getContainer().style.clip = `rect(${nw.y}px, ${x}px, ${se.y}px, ${nw.x}px)`;
+  $('swipeline').style.left = swipePct + '%';
+}
+function startSwipe() {
+  if (!tilesMeta || !tilesMeta.before_date) return;
+  stopSwipe(); swipeOn = true; imgLayer = 'after';
+  overlay.setUrl(tilesMeta.url.replace('{layer}', 'after'));
+  beforeLayer = L.tileLayer(tilesMeta.url.replace('{layer}', 'before'), { minZoom:tilesMeta.minzoom,
+    maxNativeZoom:tilesMeta.maxzoom, maxZoom:20, bounds:tilesMeta.bounds }).addTo(map);
+  beforeLayer.on('load', clipBefore); clipBefore();
+  ['swipeline', 'swipelbl'].forEach(id => $(id).hidden = false);
+  $('btnSwipe').classList.add('on'); $('btnBefore').classList.remove('on'); $('btnAfter').classList.remove('on');
+  $('imgdate').textContent = tilesMeta.before_date + ' ⇆ ' + tilesMeta.after_date;
+}
+function stopSwipe() {
+  swipeOn = false; if (beforeLayer) { map.removeLayer(beforeLayer); beforeLayer = null; }
+  ['swipeline', 'swipelbl'].forEach(id => $(id).hidden = true); $('btnSwipe').classList.remove('on');
+}
+map.on('move zoom resize', clipBefore);
+(() => {   // drag the white line to wipe between before and after
+  let drag = false;
+  const at = e => { const r = $('mapwrap').getBoundingClientRect(), x = (e.touches ? e.touches[0].clientX : e.clientX);
+    swipePct = Math.max(0, Math.min(100, (x - r.left) / r.width * 100)); clipBefore(); };
+  $('swipeline').addEventListener('mousedown', e => { drag = true; map.dragging.disable(); e.preventDefault(); });
+  $('swipeline').addEventListener('touchstart', e => { drag = true; map.dragging.disable(); }, { passive:true });
+  window.addEventListener('mousemove', e => drag && at(e));
+  window.addEventListener('touchmove', e => drag && at(e), { passive:true });
+  const up = () => { if (drag) { drag = false; map.dragging.enable(); } };
+  window.addEventListener('mouseup', up); window.addEventListener('touchend', up);
+})();
+function showLayer(which) {
+  stopSwipe();
+  imgLayer = which; setToggle();
+  if (overlay && tilesMeta) overlay.setUrl(tilesMeta.url.replace('{layer}', which));
+}
+
+const post = url => fetch(url, { method:'POST' }).then(r => r.json());
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function color(s) {
+  if (s.status.endsWith('survivor')) return css('--survivor');
+  if (s.status === 'no_signal_2_scans') return css('--nosignal');
+  return css(COLORS[s.grade_label] || '--possible');
+}
+
+async function loadRegions() {
+  const r = await (await fetch('/regions')).json();
+  $('region').innerHTML = r.regions.map(x =>
+    `<option value="${x.slug}" ${x.slug === r.current ? 'selected' : ''}>${x.live ? '🔴 ' + esc(x.name) + ' · live room sensor' :
+      esc(x.name) + ' · 2023 replay · ' + x.destroyed + ' destroyed'}</option>`).join('');
+}
+$('region').onchange = async e => {
+  $('region').disabled = true;
+  await post('/region?name=' + encodeURIComponent(e.target.value));
+  $('region').disabled = false; selected = null; $('siteid').textContent = '';
+  $('detail').innerHTML = '<span class="muted">Click a building on the map or in the list.</span>';
+  poll(); pollFeed();
+};
+
+function render(d) {
+  last = d;
+  const c = d.counters;
+  $('clock').textContent = d.live ? new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : d.replay_clock.replace(' local', '').slice(5);
+  $('clocklbl').textContent = d.live ? 'live, now' : 'replay clock';
+  $('hours').textContent = d.live ? '–' : c.hours_since_collapse.toFixed(1);
+  $('ranked').textContent = c.sites_ranked;
+  $('teams').textContent = c.teams_deployed + '/3';
+  $('surv').textContent = c.survivors_confirmed;
+
+  if (d.region_slug !== region) {             // new region: re-fit and swap the satellite overlay
+    region = d.region_slug;
+    $('subtitle').textContent = d.live ? 'LIVE drill · real WiFi sensor near the GB10' : 'Earthquake 6 Feb 2023 · replay';
+    $('attr').firstChild.textContent = d.live ? 'Footprint © OpenStreetMap contributors. ' : 'Damage grading: Copernicus EMS EMSR648, © European Union. ';
+    if (overlay) { map.removeLayer(overlay); overlay = null; }
+    if (ctxLayer) { map.removeLayer(ctxLayer); ctxLayer = null; }
+    if (d.overlay_img && d.bounds) ctxLayer = L.imageOverlay(d.overlay_img, d.bounds, { opacity:1, interactive:false, pane:'ctx' }).addTo(map);
+    if (d.tiles) {
+      tilesMeta = d.tiles;
+      const tb = L.latLngBounds(d.tiles.bounds); if (d.bounds) tb.extend(d.bounds);
+      map.setMaxBounds(tb.pad(0.15)); map.setMinZoom(d.tiles.minzoom);
+      overlay = L.tileLayer(d.tiles.url.replace('{layer}', imgLayer), { minZoom:d.tiles.minzoom, maxNativeZoom:d.tiles.maxzoom,
+        maxZoom:20, bounds:d.tiles.bounds, keepBuffer:4, updateWhenZooming:false }).addTo(map);
+      overlay.on('loading', () => $('loading').hidden = false);
+      overlay.on('load', () => $('loading').hidden = true);
+      overlay.bringToBack();
+      if (!d.tiles.before_date) imgLayer = 'after';
+      overlay.setUrl(d.tiles.url.replace('{layer}', imgLayer));
+      stopSwipe();
+      $('imgtoggle').hidden = false; $('btnBefore').hidden = $('btnSwipe').hidden = !d.tiles.before_date; setToggle();
+      $('imgattr').textContent = (d.tiles.attribution || 'Imagery © Maxar, CC BY-NC 4.0') + '. ';
+    } else if (d.overlay_img) {
+      overlay = L.imageOverlay(d.overlay_img, d.bounds, { opacity:.9 }).addTo(map);
+      $('imgtoggle').hidden = true;
+      $('imgattr').textContent = 'Imagery © Maxar, CC BY-NC 4.0. ';
+    } else { $('imgtoggle').hidden = true; $('imgattr').textContent = ''; map.setMaxBounds(null); map.setMinZoom(3); }
+    // Fit to the main cluster: drop the 15% of buildings farthest from the median (outliers stay pannable).
+    const med = k => d.sites.map(s => s[k]).sort((a, b) => a - b)[Math.floor(d.sites.length / 2)];
+    const c = [med('lat'), med('lon')];
+    const near = [...d.sites].sort((a, b) => map.distance(c, [a.lat, a.lon]) - map.distance(c, [b.lat, b.lon]))
+      .slice(0, Math.max(1, Math.ceil(d.sites.length * 0.85)));
+    map.fitBounds(L.latLngBounds(near.map(s => [s.lat, s.lon])), { padding:[70,70], maxZoom: d.live ? 18 : 17 });
+    loadRegions();
+  }
+
+  layers.clearLayers();
+  for (const s of d.sites) {
+    const surv = s.status.endsWith('survivor'), sel = s.id === selected;
+    if (s.outline) { const hot = surv || (d.live && liveMoving);
+      L.polygon(s.outline.map(p => [p[1], p[0]]), { color: hot ? css('--survivor') : '#58a6ff',
+      weight: 3, fillOpacity: hot ? .3 : .08, className: hot ? 'pulse' : '' }).on('click', () => select(s.id)).addTo(layers); }
+    L.circleMarker([s.lat, s.lon], {
+      radius: sel ? 12 : surv ? 11 : 8, color: sel ? '#fff' : surv ? css('--survivor') : '#0b0e13',
+      weight: sel ? 3 : 2, fillColor: color(s), fillOpacity:.95,
+      className: s.status === 'confirmed_survivor' || s.escalated ? 'pulse' : ''
+    }).on('click', () => select(s.id))
+      .bindTooltip(`${name(s.id)} · priority ${s.priority} · ${s.grade_label} · ${STATUS[s.status]}`).addTo(layers);
+    L.marker([s.lat, s.lon], { interactive:false,
+      icon: L.divIcon({ className:'lbl', html:String(parseInt(s.id.slice(2), 10)), iconAnchor:[-10, 6] }) }).addTo(layers);
+  }
+  const TEAMCOL = { T1:'#ff7b72', T2:'#79c0ff', T3:'#d2a8ff' };
+  const at = Object.fromEntries(d.sites.map(s => [s.id, [s.lat, s.lon]]));
+  for (const t of d.teams) {
+    const path = [[t.lat, t.lon]].concat((t.route || []).map(id => at[id]).filter(Boolean));
+    if (path.length > 1) {
+      L.polyline(path, { color:TEAMCOL[t.id], weight:4, opacity:.9, dashArray:'10 7' }).addTo(layers)
+        .bindTooltip(`${team(t.id)} route (OR-Tools): ` + t.route.map(name).join(' → '));
+      L.circleMarker(path[1], { radius:15, color:TEAMCOL[t.id], weight:3, fill:false }).addTo(layers);
+    }
+  }
+  for (const t of d.teams)
+    L.marker([t.lat, t.lon], { icon: L.divIcon({ className:'team', html:team(t.id), iconSize:[52,18],
+      iconAnchor:[26, 28 + 22 * (parseInt(t.id.slice(1), 10) - 1)] }) })
+      .bindTooltip(t.site ? `${team(t.id)} at ${name(t.site)}` : `${team(t.id)} free`).addTo(layers);
+
+  const by = Object.fromEntries(d.sites.map(s => [s.id, s]));
+  $('decisions').innerHTML = d.awaiting_ack.length ? d.awaiting_ack.map(id => {
+    const s = by[id];
+    const what = s.proposed_team ? `Send ${team(s.proposed_team)} → ${name(id)}` :
+                 s.escalated ? `Send medical support → ${name(id)}` : `Confirm survivor, start rescue → ${name(id)}`;
+    return `<div class="decision"><span>${what}</span><button class="go" onclick="ack('${id}')">Approve</button></div>`;
+  }).join('') + (d.awaiting_ack.length > 1 ? `<div class="decision"><span class="muted">All of the above</span><button onclick="ack('all')">Approve all</button></div>` : '')
+    : '<span class="muted">Nothing waiting for you.</span>';
+
+  $('people').innerHTML = d.people.length ? d.people.map(p => {
+    const s = by[p.site_id];
+    const mark = s.escalated ? '🚨' : p.status === 'confirmed_survivor' ? '🟢' : '🟡';
+    return `<div class="row clickable" onclick="select('${p.site_id}')"><span>${mark}</span><span class="id" style="width:auto">${name(p.site_id)}</span>` +
+      `<span class="st">${p.breathing_bpm == null ? 'breathing not measured' : p.breathing_bpm + ' breaths/min'} · ${STATUS[p.status]}</span></div>`;
+  }).join('') : '<span class="muted">None detected yet. No signal does not mean nobody.</span>';
+
+  $('list').innerHTML = [...d.sites].sort((a, b) => a.priority - b.priority).map(s =>
+    `<div class="row clickable" onclick="select('${s.id}')"><span class="p">${s.priority}</span>` +
+    `<span class="dot" style="background:${color(s)}"></span><span class="id" style="width:84px">${name(s.id)}</span>` +
+    `<span class="st">${s.grade_label}${s.expected_occupants ? ' · ~' + s.expected_occupants.toLocaleString() + ' ppl' : ''}${s.escalated ? ' · 🚨 weakening' : ' · ' + STATUS[s.status]}</span></div>`).join('');
+  if (selected) refreshDetail(false);
+}
+
+async function ack(target) { await post('/ack?site=' + encodeURIComponent(target)); poll(); pollFeed(); }
+
+function select(id) { selected = id; $('siteid').textContent = name(id); refreshDetail(true); if (last) render(last); }
+
+async function refreshDetail(full) {
+  const s = await (await fetch('/site?site_id=' + selected)).json();
+  const st = s.state, pr = last && last.sites.find(x => x.id === s.id);
+  const facts = `<dl class="kv">
+      <dt>Priority</dt><dd>${pr ? pr.priority : '–'}</dd>
+      <dt>Damage</dt><dd>${esc(s.grade_label)} <span class="muted">${last && last.live ? '(live drill, no damage data)' : '(Copernicus, satellite)'}</span></dd>
+      <dt>Use</dt><dd>${esc(s.building_use)}</dd>
+      <dt>Footprint</dt><dd>${s.footprint_m2 == null ? 'not mapped' : s.footprint_m2.toLocaleString() + ' m²'}</dd>
+      <dt>People inside</dt><dd>${pr && pr.expected_occupants != null ? '~' + pr.expected_occupants.toLocaleString() + ' <span class="muted">(estimate, not a count)</span>' : '–'}</dd>
+      <dt>Status</dt><dd>${STATUS[st.status]}${st.escalated ? ' · 🚨 weakening' : ''}</dd>
+      <dt>Team</dt><dd>${st.team ? team(st.team) : '–'}</dd>
+      <dt>Scans</dt><dd>${st.scans}</dd></dl>`;
+  if (!full && $('detail').querySelector('.kv')) { $('detail').querySelector('.kv').outerHTML = facts; return; }
+  const imgs = s.before_img ? `<div class="imgs">
+      <figure><img src="${s.before_img}" alt="Satellite image before the quake"><figcaption>Before · ${s.before_date}</figcaption></figure>
+      <figure><img src="${s.after_img}" alt="Satellite image after the quake"><figcaption>After · ${s.after_date}</figcaption></figure></div>
+      <button id="askai">Ask the local AI to compare</button><div id="aiout"></div>`
+    : last && last.live ? '<p class="muted">Live drill: the sensor for this building is the real WiFi in this room (see WiFi sensing below).</p>'
+    : '<p class="muted">No before/after satellite pair covers this building.</p>';
+  $('detail').innerHTML = facts + imgs;
+  if ($('askai')) $('askai').onclick = assess;
+}
+
+async function assess() {
+  $('aiout').innerHTML = '<div class="ai muted">qwen3.5 on this GB10 is looking at both images…</div>';
+  const t0 = performance.now();
+  const r = await (await fetch('/assess?site_id=' + selected)).json();
+  const secs = ((performance.now() - t0) / 1000).toFixed(1);
+  const lines = String(r.answer).split('\n').filter(Boolean);
+  $('aiout').innerHTML = `<div class="ai"><b>${esc(lines[0])}</b> ${esc(lines.slice(1).join(' '))}
+    <div class="muted" style="margin-top:4px">${esc(r.method)} · ${secs}s · Copernicus says ${esc(r.copernicus_grade)}${
+    r.agrees_with_copernicus === false ? ' · <b>disagrees</b>' : r.agrees_with_copernicus ? ' · agrees' : ''}</div></div>`;
+}
+
+async function pollRuview() {
+  try {
+    const r = await (await fetch('/ruview')).json();
+    if (!r.ok) { $('ruview').innerHTML = '<span class="muted">RuView not reachable (replay sensors still work).</span>'; return; }
+    const conf = Math.round((r.confidence || 0) * 100);
+    $('ruview').innerHTML = `<dl class="kv">
+      <dt>Source</dt><dd><b>${esc(r.source)}</b> WiFi CSI <span class="muted">(demo data)</span></dd>
+      <dt>Presence</dt><dd>${r.presence ? 'yes' : 'no'} · ${esc((r.motion_level || '').replace('_', ' '))}</dd>
+      <dt>Persons</dt><dd>${r.estimated_persons ?? '–'} <span class="muted">(simulated data, not this room)</span></dd>
+      <dt>Breathing</dt><dd>${r.breathing_bpm ?? '<span class="muted">abstained (needs calibration)</span>'}</dd>
+      <dt>Linked to</dt><dd>${r.bound_site ? name(r.bound_site) : '<span class="muted">no building yet</span>'}</dd>
+      <dt>Confidence</dt><dd>${conf}%<div class="meter"><i style="width:${conf}%"></i></div></dd></dl>` + liveHtml(r.live);
+  } catch (e) { console.warn(e); }
+}
+
+function liveHtml(l) {
+  if (!l) return '';
+  const conf = Math.round((l.confidence || 0) * 100);
+  return `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)">
+    <b>Live WiFi · this room</b> <span class="muted">${l.fresh ? '● live' : 'stale'} · ${esc(l.interface)} · ${Array.isArray(l.rssi_dbm) ? l.rssi_dbm.length + ' antennas: ' + l.rssi_dbm.join(' / ') : l.rssi_dbm} dBm</span>
+    <dl class="kv" style="margin-top:4px"><dt>Movement nearby</dt><dd><b>${l.presence ? 'YES' : 'no'}</b></dd>
+    <dt>Signal change</dt><dd>${(l.per_antenna_variance || [l.rssi_variance]).join(' / ')} dB² <span class="muted">(alarm above ${l.threshold ?? '–'}; people moving change WiFi)</span>
+      <div class="meter"><i style="width:${Math.min(100, 100 * l.rssi_variance / (2 * (l.threshold || 2)))}%;background:${l.presence ? 'var(--survivor)' : 'var(--nosignal)'}"></i></div></dd>
+    <dt>Linked to</dt><dd>${l.bound_site ? name(l.bound_site) : '<span class="muted">no building</span>'}</dd>
+    <dt>Confidence</dt><dd>${conf}%<div class="meter"><i style="width:${conf}%"></i></div></dd></dl>
+    <div class="muted" style="font-size:11px">Real signal from this machine's WiFi, classified by RuView. It sees movement only:
+    it cannot count people, does not see people sitting still, and does not measure breathing.
+    Counting and breathing need CSI sensors (about $9 ESP32-S3 per room).</div></div>`;
+}
+
+let liveMoving = false;
+async function pollScope() {
+  if (!last || !last.live) { $('scope').hidden = true; setTimeout(pollScope, 1500); return; }
+  try {
+    const l = await (await fetch('/livesignal')).json();
+    $('scope').hidden = false;
+    liveMoving = !!l.presence;
+    $('scope').classList.toggle('moving', liveMoving);
+    $('scopestate').className = liveMoving ? 'on' : '';
+    $('scopestate').textContent = liveMoving ? '● MOVEMENT DETECTED' : `still · alarm above ${l.threshold} dB²${l.calibrated ? ' (calibrated)' : ''}`;
+    drawScope(l);
+  } catch (e) { console.warn(e); }
+  setTimeout(pollScope, 400);
+}
+function drawScope(l) {
+  const cv = $('scopecv'), g = cv.getContext('2d'), W = cv.width, H = cv.height;
+  g.clearRect(0, 0, W, H);
+  const a = (l.trace || []).map(p => p[1]), b = l.trace2 || [];
+  const all = a.concat(b); if (!all.length) return;
+  const mid = all.reduce((x, y) => x + y, 0) / all.length, span = 6;     // +-6 dB around the mean
+  g.strokeStyle = '#2a3240'; g.lineWidth = 1;
+  for (let k = -1; k <= 1; k++) { const y = H / 2 - k * H / 4; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+  const line = (arr, color) => {
+    if (arr.length < 2) return;
+    g.strokeStyle = color; g.lineWidth = 2.2; g.beginPath();
+    arr.forEach((v, i) => { const x = i / 149 * W, y = H / 2 - (v - mid) / span * (H / 2);
+      i ? g.lineTo(x, Math.max(2, Math.min(H - 2, y))) : g.moveTo(x, y); });
+    g.stroke();
+  };
+  line(a, liveMoving ? '#3fb950' : '#58a6ff');
+  line(b, liveMoving ? '#a5f3b5' : '#d29922');
+  g.fillStyle = '#8b949e'; g.font = '11px system-ui';
+  g.fillText('antenna 1', 6, 13); g.fillStyle = liveMoving ? '#a5f3b5' : '#d29922'; g.fillText('antenna 2', 70, 13);
+}
+
+const WHO = { 'telegram-user':'👤 Telegram', 'telegram-bot':'🤖 Lifeline → Telegram',
+              'dashboard-user':'🖥️ Dashboard', 'dashboard-bot':'🤖 Lifeline → Dashboard' };
+let pending = null, lastChat = '';
+function renderChat(msgs) {
+  const html = msgs.map(m => `<div class="msg ${m.who.endsWith('user') ? 'user' : 'bot'}"><span class="who">${WHO[m.who] || m.who} · ${
+      new Date(m.ts * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>${esc(m.text.replace(/\*\*/g, ''))}</div>`).join('')
+    + (pending ? `<div class="msg bot pending"><span class="who">🤖 Lifeline</span>thinking on the GB10…</div>` : '');
+  if (html !== lastChat) { lastChat = html; const c = $('convo'); c.innerHTML = html || '<span class="muted">No messages yet.</span>'; c.scrollTop = c.scrollHeight; }
+}
+async function pollChat() { try { renderChat((await (await fetch('/chat')).json()).messages); } catch (e) { console.warn(e); } }
+async function say(text) {
+  if (!text.trim()) return;
+  pending = text; pollChat();
+  try { await post('/command?text=' + encodeURIComponent(text)); } finally { pending = null; pollChat(); poll(); pollFeed(); }
+}
+function fill(t) { $('cmd').value = t; $('cmd').focus(); }
+$('cmdform').onsubmit = e => { e.preventDefault(); const t = $('cmd').value; $('cmd').value = ''; say(t); };
+
+async function startTest() { await post('/livetest'); pollTest(); }
+async function pollTest() {
+  const t = await (await fetch('/livetest')).json();
+  const b = $('testbanner');
+  if (t.state === 'running') {
+    const last = t.samples && t.samples[t.samples.length - 1];
+    b.hidden = false; b.className = t.phase === 'walk' ? 'walk' : '';
+    b.innerHTML = `${t.phase === 'walk' ? 'WALK NOW' : t.samples && t.samples.length < 20 ? 'STAY STILL · calibrating' : 'STAY STILL'} · ${t.remaining}s
+      <small>Live sensor says: ${last && last.moving ? '<b style="color:var(--survivor)">movement</b>' : 'no movement'}
+      · signal change ${last ? last.variance : '–'} dB²</small>`;
+    setTimeout(pollTest, 500);
+  } else { b.hidden = true; pollProof(); }
+}
+async function pollProof() {
+  try {
+    const p = await (await fetch('/proof')).json();
+    const v = p.vision, l = p.live;
+    const pct = x => x == null ? '–' : Math.round(x * 100) + '%';
+    $('proof').innerHTML = `<b>Satellite + local AI vs EU experts</b>
+      ${v ? `<dl class="kv" style="margin-top:4px">
+        <dt>Damage found</dt><dd>${pct(v.damage_recall)} of expert-graded damaged/destroyed buildings</dd>
+        <dt>Destroyed → "collapsed"</dt><dd>${pct(v.destroyed_flagged_collapsed)}</dd>
+        <dt>Undamaged → "standing"</dt><dd>${pct(v.undamaged_correctly_standing)} <span class="muted">(controls)</span></dd>
+        <dt>Sample</dt><dd>${v.n} buildings, 5 cities, blind · ${v.median_seconds}s each on GB10</dd></dl>`
+        : '<div class="muted">running the blind test…</div>'}
+      <div style="margin-top:10px"><b>Live WiFi sensor, 60-second test</b></div>
+      ${l ? `<dl class="kv" style="margin-top:4px">
+        <dt>Walking caught</dt><dd>${l.walk_detected_s}/${l.walk_window_s} s (${pct(l.detection_rate)})</dd>
+        <dt>False alarms</dt><dd>${l.false_alarm_s}/${l.still_window_s} s still (${pct(l.false_alarm_rate)})</dd>
+        <dt>Calibrated</dt><dd>${l.threshold ?? '–'} dB² <span class="muted">${l.calibrated_on || 'not calibrated (old run)'}</span></dd>
+        <dt>Reaction</dt><dd>${l.first_detection_after_walk_start_s ?? 'not detected'}${l.first_detection_after_walk_start_s != null ? ' s after walking started' : ''}</dd></dl>`
+        : '<div class="muted">not run yet</div>'}
+      <button style="margin-top:8px" onclick="startTest()">Run 60-second live test</button>`;
+  } catch (e) { console.warn(e); }
+}
+
+async function pollFeed() {
+  try {
+    const r = await (await fetch('/alerts')).json();
+    $('feed').innerHTML = r.alerts.slice(0, 12).map(a => `<div class="item">${esc(a.text)}
+        <div class="meta">${new Date(a.real_time * 1000).toLocaleTimeString()} ·
+        ${a.delivered ? '<span class="posted">posted to Telegram ✓</span>' : '<span class="pending">waiting for next agent post</span>'}</div></div>`).join('')
+      || '<span class="muted">No alerts yet.</span>';
+  } catch (e) { console.warn(e); }
+}
+
+async function poll() { try { render(await (await fetch('/map')).json()); } catch (e) { console.warn(e); } }
+loadRegions(); poll(); pollRuview(); pollFeed(); pollProof(); pollTest(); pollScope(); pollChat();
+setInterval(pollChat, 3000);
+setInterval(() => { if ($('testbanner').hidden) pollProof(); }, 15000);
+setInterval(poll, 2000); setInterval(pollRuview, 2000); setInterval(pollFeed, 3000);
+</script>
+</body>
+</html>
